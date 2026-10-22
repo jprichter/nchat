@@ -30,10 +30,12 @@ redirects before transport. For the standard HTTP transport, DNS answers must
 all be public addresses; loopback, private, link-local, shared, documentation
 and transition ranges are rejected. Connections dial the checked IP directly
 while TLS verifies the original hostname, preventing a second DNS lookup from
-rebinding the destination. Media downloads deliberately bypass HTTP/SOCKS and
-environment proxies and custom dialers: proxies could otherwise resolve the
-hostname again. Networks requiring a proxy may therefore fail to download
-attachments. Websocket and upload proxy settings retain their existing behavior.
+rebinding the destination. Attachment downloads deliberately ignore the
+configured `proxy_` SOCKS5 or HTTP proxy, environment proxies and custom dialers,
+because a proxy could resolve the hostname again. With `proxy_` set, downloads
+therefore connect directly to WhatsApp's media servers and do not use your proxy;
+that exposes your IP address to them. Websocket and upload traffic still use the
+configured proxy.
 A library caller injecting its own RoundTripper supplies trusted application
 code responsible for equivalent connection checks; URL restrictions still apply.
 No live account was used for the offline regression tests, so worldwide CDN

@@ -435,7 +435,8 @@ SOCKS server). Note: In order to use a proxy while setting up nchat the first
 time, it is recommended to first run nchat without arguments (`nchat`) for its
 config dir to be created, and then edit proxy settings in
 `~/.config/nchat/app.conf` as needed, before running `nchat -s` to setup an
-account.
+account. Attachment downloads do not use this proxy and connect directly to
+WhatsApp media servers; see [privacy notes](doc/PRIVACY.md).
 
 ### timestamp_iso
 
