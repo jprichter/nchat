@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -1106,8 +1107,9 @@ func (cli *Client) getUnifiedSessionID() string {
 	return strconv.FormatInt(unifiedID, 10)
 }
 
+// Unified session telemetry is opt-in in nchat, for pairing and presence alike.
 func (cli *Client) sendUnifiedSession() {
-	if cli == nil {
+	if cli == nil || os.Getenv("NCHAT_WHATSAPP_UNIFIED_SESSION") != "1" {
 		return
 	}
 

@@ -1,10 +1,80 @@
 Base-Commit: 662ad1dc6900ffe1b1a2a6bc0fca01cba488d747
 Base-Branch: 
+diff --git a/client.go b/client.go
+index dcbad5d..091bf94 100644
+--- a/client.go
++++ b/client.go
+@@ -16,6 +16,7 @@ import (
+ 	"net"
+ 	"net/http"
+ 	"net/url"
++	"os"
+ 	"runtime/debug"
+ 	"slices"
+ 	"strconv"
+@@ -1106,8 +1107,9 @@ func (cli *Client) getUnifiedSessionID() string {
+ 	return strconv.FormatInt(unifiedID, 10)
+ }
+ 
++// Unified session telemetry is opt-in in nchat, for pairing and presence alike.
+ func (cli *Client) sendUnifiedSession() {
+-	if cli == nil {
++	if cli == nil || os.Getenv("NCHAT_WHATSAPP_UNIFIED_SESSION") != "1" {
+ 		return
+ 	}
+ 
 diff --git a/download.go b/download.go
-index 0777de8..4f31c30 100644
+index 6d5e4e5..829740b 100644
 --- a/download.go
 +++ b/download.go
-@@ -409,3 +409,16 @@ func validateMedia(iv, file, macKey, mac []byte) error {
+@@ -17,6 +17,7 @@ import (
+ 	"io"
+ 	"net"
+ 	"net/http"
++	neturl "net/url"
+ 	"strings"
+ 	"time"
+ 
+@@ -262,7 +263,7 @@ func (cli *Client) DownloadMediaWithPath(
+ 		fileHash = make([]byte, 32)
+ 	}
+ 	if !strings.HasPrefix(directPath, "/") {
+-		return nil, fmt.Errorf("media download path does not start with slash: %s", directPath)
++		return nil, errors.New("media download path does not start with slash")
+ 	}
+ 	var mediaConn *MediaConn
+ 	mediaConn, err = cli.refreshMediaConn(ctx, false)
+@@ -363,6 +364,10 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
+ 	if cli == nil {
+ 		return nil, ErrClientIsNil
+ 	}
++	parsedURL, err := neturl.Parse(url)
++	if err != nil || validateMediaURL(parsedURL) != nil {
++		return nil, errUnsafeMediaURL
++	}
+ 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to prepare request: %w", err)
+@@ -372,8 +377,17 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
+ 	if userAgent := cli.getUserAgent(); userAgent != "" {
+ 		req.Header.Set("User-Agent", cli.getUserAgent())
+ 	}
+-	resp, err := cli.mediaHTTP.Do(req)
++	if err := validateMediaURL(req.URL); err != nil {
++		return nil, err
++	}
++	resp, err := mediaDownloadClient(cli.mediaHTTP).Do(req)
+ 	if err != nil {
++		// net/http embeds the full URL, including bearer query parameters, in
++		// request errors which the retry and direct-path callers may log.
++		var urlErr *neturl.Error
++		if errors.As(err, &urlErr) {
++			return nil, &neturl.Error{Op: urlErr.Op, URL: "[redacted]", Err: urlErr.Err}
++		}
+ 		return nil, err
+ 	}
+ 	if resp.StatusCode != http.StatusOK {
+@@ -422,3 +436,16 @@ func validateMedia(iv, file, macKey, mac []byte) error {
  	}
  	return nil
  }
@@ -21,11 +91,301 @@ index 0777de8..4f31c30 100644
 +	DownloadableMessage
 +	GetUrl() string
 +}
+diff --git a/media-policy.go b/media-policy.go
+new file mode 100644
+index 0000000..7d87a28
+--- /dev/null
++++ b/media-policy.go
+@@ -0,0 +1,137 @@
++// Copyright (c) 2026 nchat contributors
++// SPDX-License-Identifier: MPL-2.0
++
++package whatsmeow
++
++import (
++	"context"
++	"errors"
++	"net"
++	"net/http"
++	"net/netip"
++	"net/url"
++	"strings"
++	"time"
++)
++
++var errUnsafeMediaURL = errors.New("media destination is not an approved HTTPS WhatsApp CDN")
++
++// The upstream media_conn response advertises mmg.whatsapp.net and regional
++// media-*.cdn.whatsapp.net hosts. FetchStickerPack uses static.whatsapp.net.
++// See doc/PRIVACY.md for evidence and the deliberate compatibility boundary.
++func validateMediaURL(u *url.URL) error {
++	if u == nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.Fragment != "" || strings.Contains(u.Host, ":") {
++		return errUnsafeMediaURL
++	}
++	host := strings.ToLower(u.Hostname())
++	if host == "mmg.whatsapp.net" || host == "static.whatsapp.net" {
++		return nil
++	}
++	if strings.HasPrefix(host, "media-") && strings.HasSuffix(host, ".cdn.whatsapp.net") {
++		label := strings.TrimSuffix(host, ".cdn.whatsapp.net")
++		if len(label) <= 63 && len(label) > len("media-") && !strings.HasSuffix(label, "-") {
++			for _, c := range label {
++				if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
++					return errUnsafeMediaURL
++				}
++			}
++			return nil
++		}
++	}
++	return errUnsafeMediaURL
++}
++
++func publicMediaIP(ip netip.Addr) bool {
++	ip = ip.Unmap()
++	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() &&
++		!netip.MustParsePrefix("100.64.0.0/10").Contains(ip) &&
++		!netip.MustParsePrefix("192.0.0.0/24").Contains(ip) &&
++		!netip.MustParsePrefix("192.0.2.0/24").Contains(ip) &&
++		!netip.MustParsePrefix("198.18.0.0/15").Contains(ip) &&
++		!netip.MustParsePrefix("198.51.100.0/24").Contains(ip) &&
++		!netip.MustParsePrefix("203.0.113.0/24").Contains(ip) &&
++		(!ip.Is6() || netip.MustParsePrefix("2000::/3").Contains(ip)) &&
++		!netip.MustParsePrefix("2001::/23").Contains(ip) &&
++		!netip.MustParsePrefix("2001:db8::/32").Contains(ip) &&
++		!netip.MustParsePrefix("2002::/16").Contains(ip)
++}
++
++type mediaResolver interface {
++	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
++}
++
++// Resolve once, reject mixed public/private answers, and dial the checked IP
++// directly. TLS still authenticates the original hostname. Neither a second DNS
++// lookup nor a proxy/custom TLS dialer can bypass this check.
++func dialMedia(ctx context.Context, network, address string, resolver mediaResolver, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
++	host, port, err := net.SplitHostPort(address)
++	if err != nil || port != "443" || validateMediaURL(&url.URL{Scheme: "https", Host: host}) != nil {
++		return nil, errUnsafeMediaURL
++	}
++	ips, err := resolver.LookupNetIP(ctx, "ip", host)
++	if err != nil {
++		return nil, errors.New("media DNS lookup failed")
++	}
++	if len(ips) == 0 {
++		return nil, errors.New("media DNS returned no addresses")
++	}
++	for _, ip := range ips {
++		if !publicMediaIP(ip) {
++			return nil, errors.New("media DNS returned a non-public address")
++		}
++	}
++	for _, ip := range ips {
++		conn, dialErr := dial(ctx, network, net.JoinHostPort(ip.String(), port))
++		if dialErr == nil {
++			return conn, nil
++		}
++		err = dialErr
++	}
++	return nil, err
++}
++
++// Custom RoundTrippers are trusted application code (also useful for tests).
++// URL validation still runs before invoking them, including on redirects.
++func mediaDownloadClient(base *http.Client) *http.Client {
++	client := *base
++	transport := client.Transport
++	if transport == nil {
++		transport = http.DefaultTransport
++	}
++	if original, ok := transport.(*http.Transport); ok {
++		safe := original.Clone()
++		safe.Proxy = nil
++		safe.DialTLS = nil
++		safe.DialTLSContext = nil
++		safe.DisableKeepAlives = true
++		dialer := &net.Dialer{Timeout: 30 * time.Second}
++		safe.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
++			return dialMedia(ctx, network, address, net.DefaultResolver, dialer.DialContext)
++		}
++		transport = safe
++	}
++	client.Transport = mediaPolicyTransport{transport}
++	previous := client.CheckRedirect
++	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
++		if err := validateMediaURL(req.URL); err != nil {
++			return err
++		}
++		if len(via) >= 10 {
++			return errors.New("too many media redirects")
++		}
++		if previous != nil {
++			return previous(req, via)
++		}
++		return nil
++	}
++	return &client
++}
++
++type mediaPolicyTransport struct{ http.RoundTripper }
++
++func (t mediaPolicyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	if err := validateMediaURL(req.URL); err != nil {
++		return nil, err
++	}
++	return t.RoundTripper.RoundTrip(req)
++}
+diff --git a/media-policy_test.go b/media-policy_test.go
+new file mode 100644
+index 0000000..5f799b1
+--- /dev/null
++++ b/media-policy_test.go
+@@ -0,0 +1,141 @@
++package whatsmeow
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"net/http"
++	"net/netip"
++	"net/url"
++	"strings"
++	"testing"
++
++	waLog "go.mau.fi/whatsmeow/util/log"
++)
++
++type testMediaTransport func(*http.Request) (*http.Response, error)
++
++func (f testMediaTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func TestMediaURLPolicy(t *testing.T) {
++	for _, raw := range []string{"https://mmg.whatsapp.net/v/t62.7118-24/file?token=x", "https://media-fra3-2.cdn.whatsapp.net/mms/image/file", "https://static.whatsapp.net/sticker?id=1"} {
++		u, _ := url.Parse(raw)
++		if err := validateMediaURL(u); err != nil {
++			t.Errorf("valid URL rejected: %s", raw)
++		}
++	}
++	bad := []string{
++		"http://mmg.whatsapp.net/file", "https://mmg.whatsapp.net:443/file", "https://mmg.whatsapp.net:8443/file",
++		"https://user@mmg.whatsapp.net/file", "https://mmg.whatsapp.net.evil.test/file", "https://evilwhatsapp.net/file",
++		"https://evil.cdn.whatsapp.net/file", "https://media-a.evil.cdn.whatsapp.net/file", "https://mmg.whatsapp.net./file",
++		"https://127.0.0.1/file", "https://[::1]/file", "https://169.254.169.254/file", "file:///etc/passwd",
++		"https://mmg.whatsapp.net/file#fragment", "//mmg.whatsapp.net/file", "https://mmg.whatsapp.net:/file",
++	}
++	for _, raw := range bad {
++		t.Run(raw, func(t *testing.T) {
++			cli := &Client{Log: waLog.Noop, mediaHTTP: &http.Client{Transport: testMediaTransport(func(r *http.Request) (*http.Response, error) {
++				t.Fatal("disallowed URL reached transport")
++				return nil, nil
++			})}}
++			if _, err := cli.doMediaDownloadRequest(context.Background(), raw); err == nil {
++				t.Fatal("unsafe URL accepted")
++			}
++		})
++	}
++}
++
++func TestMediaRedirectPolicy(t *testing.T) {
++	for _, location := range []string{"http://127.0.0.1/secret", "https://evil.test/secret", "https://mmg.whatsapp.net:443/file", "https://mmg.whatsapp.net:/file", "https://user@mmg.whatsapp.net/file"} {
++		calls := 0
++		cli := &Client{mediaHTTP: &http.Client{Transport: testMediaTransport(func(r *http.Request) (*http.Response, error) {
++			calls++
++			if calls > 1 {
++				t.Fatal("disallowed redirect reached transport")
++			}
++			return &http.Response{StatusCode: 302, Header: http.Header{"Location": {location}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
++		})}}
++		if _, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file"); err == nil {
++			t.Fatal("redirect accepted")
++		}
++		if calls != 1 {
++			t.Fatal("unexpected request count")
++		}
++	}
++}
++
++func TestAllowedMediaRedirect(t *testing.T) {
++	calls := 0
++	cli := &Client{mediaHTTP: &http.Client{Transport: testMediaTransport(func(r *http.Request) (*http.Response, error) {
++		calls++
++		if calls == 1 {
++			return &http.Response{StatusCode: 302, Header: http.Header{"Location": {"https://media-fra3-2.cdn.whatsapp.net/file"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("media")), Request: r}, nil
++	})}}
++	data, err := cli.downloadMedia(context.Background(), "https://mmg.whatsapp.net/file")
++	if err != nil || string(data) != "media" || calls != 2 {
++		t.Fatalf("valid media failed: %s %v", data, err)
++	}
++}
++
++type testMediaResolver []netip.Addr
++
++func (r testMediaResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
++	return r, nil
++}
++
++func TestMediaDNSPolicy(t *testing.T) {
++	for _, raw := range []string{"127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::", "2001:db8::1"} {
++		for _, ips := range []testMediaResolver{{netip.MustParseAddr(raw)}, {netip.MustParseAddr("157.240.0.60"), netip.MustParseAddr(raw)}} {
++			_, err := dialMedia(context.Background(), "tcp", "mmg.whatsapp.net:443", ips, func(context.Context, string, string) (net.Conn, error) {
++				t.Fatal("private/mixed DNS answer reached dialer")
++				return nil, nil
++			})
++			if err == nil {
++				t.Fatalf("unsafe DNS answer accepted: %s", raw)
++			}
++		}
++	}
++	var addresses []string
++	_, _ = dialMedia(context.Background(), "tcp", "mmg.whatsapp.net:443", testMediaResolver{netip.MustParseAddr("157.240.0.60"), netip.MustParseAddr("2a03:2880:f277:1cd:face:b00c:0:167")}, func(ctx context.Context, network, address string) (net.Conn, error) {
++		addresses = append(addresses, address)
++		return nil, errors.New("offline")
++	})
++	if len(addresses) != 2 || addresses[0] != "157.240.0.60:443" || addresses[1] != "[2a03:2880:f277:1cd:face:b00c:0:167]:443" {
++		t.Fatalf("dial did not use pinned IPs: %v", addresses)
++	}
++}
++
++func TestMediaTransportRemovesAlternateDialers(t *testing.T) {
++	base := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
++		t.Fatal("custom TLS dialer called")
++		return nil, nil
++	}}}
++	client := mediaDownloadClient(base)
++	transport := client.Transport.(mediaPolicyTransport).RoundTripper.(*http.Transport)
++	if transport.Proxy != nil || transport.DialTLSContext != nil || transport.DialContext == nil {
++		t.Fatal("unsafe alternate route remains")
++	}
++	if base.Transport.(*http.Transport).Proxy == nil {
++		t.Fatal("modified shared HTTP client")
++	}
++}
++
++func TestUnifiedSessionDefaultOff(t *testing.T) {
++	for _, value := range []string{"", "0", "true"} {
++		t.Setenv("NCHAT_WHATSAPP_UNIFIED_SESSION", value)
++		// A zero client has no socket or logger: trying to send would panic.
++		(&Client{}).sendUnifiedSession()
++	}
++}
++
++func TestMediaErrorsRedactURLTokens(t *testing.T) {
++	cli := &Client{mediaHTTP: &http.Client{Transport: testMediaTransport(func(r *http.Request) (*http.Response, error) {
++		return nil, errors.New("offline")
++	})}}
++	_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file?token=SECRET")
++	if err == nil || strings.Contains(err.Error(), "SECRET") {
++		t.Fatalf("unsafe request diagnostic: %v", err)
++	}
++}
 diff --git a/socket/framesocket.go b/socket/framesocket.go
-index 37837c5..c046109 100644
+index 4d6fc6e..ff10f3f 100644
 --- a/socket/framesocket.go
 +++ b/socket/framesocket.go
-@@ -73,7 +73,7 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
+@@ -77,7 +77,7 @@ func (fs *FrameSocket) Close(code websocket.StatusCode) {
  	if code > 0 {
  		err := conn.Close(code, "")
  		if err != nil {

@@ -8,6 +8,29 @@ services for chat completion, and generally requires an API key
     Gemini: GEMINI_API_KEY
 
 
+Privacy and invocation
+----------------------
+`auto_compose_enabled=0` is the default. While disabled, nchat does not invoke
+this helper or automatically upload history for AI replies. Enabling it allows
+the auto-compose key (default Alt-I) to invoke the configured command. nchat
+writes a local plaintext temporary history file containing sender display names,
+your name and up to 25 recent messages by default (controlled by
+`auto_compose_history_count`, starting at the selected/latest message). The
+bundled script includes those names and message text in the provider payload;
+the result is placed in the message entry for you to send. Running `src/compose`
+standalone also sends its input file to the chosen service.
+
+OpenAI is the default (`gpt-4o-mini`, `OPENAI_API_KEY`); Gemini uses
+`gemini-2.0-flash` and `GEMINI_API_KEY`. Ollama (`-s ollama`) targets
+`http://localhost:11434` with the local model name `llama3.2:3b`; install that
+model locally first (for example `ollama pull llama3.2:3b`). Ollama is not always
+local: choosing a cloud model, forwarding the local server, or selecting a custom
+remote endpoint can send the same data remotely. Custom compatible URLs and
+`-m` model overrides are your responsibility to review. Verbose mode prints the
+request payload, including chat content, to stderr. See [Privacy](PRIVACY.md)
+for local storage, telemetry and backup considerations.
+
+
 Basic Testing
 -------------
 An [example chat history file](/doc/example-history.txt) is provided for

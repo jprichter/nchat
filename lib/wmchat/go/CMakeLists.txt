@@ -41,7 +41,10 @@ endif()
 # Build Go library / C archive
 set(TARGET cgowm)
 set(GOPATH ${OUTPUT_DIR})
-set(SRCS gowm.go cgowm.go go.mod go.sum)
+file(GLOB SRCS *.go)
+list(APPEND SRCS go.mod go.sum)
+file(GLOB_RECURSE INTERNAL_SRCS internal/*.go)
+list(APPEND SRCS ${INTERNAL_SRCS})
 file(GLOB_RECURSE EXT_SRCS ext/*.go)
 list(APPEND SRCS ${EXT_SRCS})
 set(LIB "libcgowm${LIBSUFFIX}")
@@ -50,7 +53,7 @@ add_custom_command(OUTPUT ${OUTPUT_DIR}/${LIB}
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMAND env GOPATH=${GOPATH} CGO_ENABLED=1 go build -buildmode=${BUILDMODE} ${CUSTOM_GO_FLAGS}
   -o "${OUTPUT_DIR}/${LIB}"
-  ${CMAKE_GO_FLAGS} ./...
+  ${CMAKE_GO_FLAGS} .
   COMMENT "Building Go library")
 add_custom_target(${TARGET} DEPENDS ${OUTPUT_DIR}/${LIB} ${HEADER})
 

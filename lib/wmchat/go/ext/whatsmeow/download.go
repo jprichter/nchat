@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -262,7 +263,7 @@ func (cli *Client) DownloadMediaWithPath(
 		fileHash = make([]byte, 32)
 	}
 	if !strings.HasPrefix(directPath, "/") {
-		return nil, fmt.Errorf("media download path does not start with slash: %s", directPath)
+		return nil, errors.New("media download path does not start with slash")
 	}
 	var mediaConn *MediaConn
 	mediaConn, err = cli.refreshMediaConn(ctx, false)
@@ -363,6 +364,10 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
 	if cli == nil {
 		return nil, ErrClientIsNil
 	}
+	parsedURL, err := neturl.Parse(url)
+	if err != nil || validateMediaURL(parsedURL) != nil {
+		return nil, errUnsafeMediaURL
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare request: %w", err)
@@ -372,8 +377,17 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
 	if userAgent := cli.getUserAgent(); userAgent != "" {
 		req.Header.Set("User-Agent", cli.getUserAgent())
 	}
-	resp, err := cli.mediaHTTP.Do(req)
+	if err := validateMediaURL(req.URL); err != nil {
+		return nil, err
+	}
+	resp, err := mediaDownloadClient(cli.mediaHTTP).Do(req)
 	if err != nil {
+		// net/http embeds the full URL, including bearer query parameters, in
+		// request errors which the retry and direct-path callers may log.
+		var urlErr *neturl.Error
+		if errors.As(err, &urlErr) {
+			return nil, &neturl.Error{Op: urlErr.Op, URL: "[redacted]", Err: urlErr.Err}
+		}
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
