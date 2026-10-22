@@ -457,10 +457,18 @@ func DownloadFromFileId(connId int, fileId string) (string, int) {
 		return DownloadFromFileInfo(client, info)
 	})
 	if err != nil {
-		LOG_WARNING("attachment download failed")
+		LOG_WARNING(attachmentDownloadWarning(err))
 		return "", FileStatusDownloadFailed
 	}
 	return info.TargetPath, FileStatusDownloaded
+}
+
+// Only log fixed policy text: wrapped HTTP errors may include private media URLs.
+func attachmentDownloadWarning(err error) string {
+	if errors.Is(err, whatsmeow.ErrMediaProxy) {
+		return "attachment download failed: " + whatsmeow.ErrMediaProxy.Error()
+	}
+	return "attachment download failed"
 }
 
 func DownloadFromFileInfo(client *whatsmeow.Client, info DownloadInfo) ([]byte, error) {

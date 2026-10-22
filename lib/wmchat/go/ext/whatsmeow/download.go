@@ -365,7 +365,7 @@ func (cli *Client) doMediaDownloadRequest(ctx context.Context, url string) (*htt
 		return nil, ErrClientIsNil
 	}
 	if cli.mediaSOCKSProxy {
-		return nil, errMediaProxy
+		return nil, ErrMediaProxy
 	}
 	parsedURL, err := neturl.Parse(url)
 	if err != nil || validateMediaURL(parsedURL) != nil {

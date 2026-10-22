@@ -64,7 +64,7 @@ index dcbad5d..957ccb7 100644
  	}
  
 diff --git a/download.go b/download.go
-index 6d5e4e5..ede7e6f 100644
+index 6d5e4e5..f42472b 100644
 --- a/download.go
 +++ b/download.go
 @@ -17,6 +17,7 @@ import (
@@ -89,7 +89,7 @@ index 6d5e4e5..ede7e6f 100644
  		return nil, ErrClientIsNil
  	}
 +	if cli.mediaSOCKSProxy {
-+		return nil, errMediaProxy
++		return nil, ErrMediaProxy
 +	}
 +	parsedURL, err := neturl.Parse(url)
 +	if err != nil || validateMediaURL(parsedURL) != nil {
@@ -150,10 +150,10 @@ index 987bada..c9097c4 100644
  	github.com/beeper/argo-go v1.1.2
 diff --git a/media-policy.go b/media-policy.go
 new file mode 100644
-index 0000000..e0b1905
+index 0000000..a5f684c
 --- /dev/null
 +++ b/media-policy.go
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,151 @@
 +// Copyright (c) 2026 nchat contributors
 +// SPDX-License-Identifier: MPL-2.0
 +
@@ -171,7 +171,9 @@ index 0000000..e0b1905
 +)
 +
 +var errUnsafeMediaURL = errors.New("media destination is not an approved HTTPS WhatsApp CDN")
-+var errMediaProxy = errors.New("media downloads through proxies are unsupported by the DNS safety policy; refusing a direct connection")
++
++// ErrMediaProxy indicates that the DNS safety policy blocks a configured media proxy.
++var ErrMediaProxy = errors.New("media downloads through proxies are unsupported by the DNS safety policy; refusing a direct connection")
 +
 +// The upstream media_conn response advertises mmg.whatsapp.net and regional
 +// media-*.cdn.whatsapp.net hosts. FetchStickerPack uses static.whatsapp.net.
@@ -261,10 +263,10 @@ index 0000000..e0b1905
 +			safe.Proxy = func(req *http.Request) (*url.URL, error) {
 +				proxyURL, err := original.Proxy(req)
 +				if err != nil {
-+					return nil, errMediaProxy
++					return nil, ErrMediaProxy
 +				}
 +				if proxyURL != nil {
-+					return nil, errMediaProxy
++					return nil, ErrMediaProxy
 +				}
 +				return nil, nil
 +			}
@@ -305,7 +307,7 @@ index 0000000..e0b1905
 +}
 diff --git a/media-policy_test.go b/media-policy_test.go
 new file mode 100644
-index 0000000..e8f2d2f
+index 0000000..d21bb39
 --- /dev/null
 +++ b/media-policy_test.go
 @@ -0,0 +1,194 @@
@@ -447,7 +449,7 @@ index 0000000..e8f2d2f
 +				return nil, nil
 +			}
 +			_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
-+			if !errors.Is(err, errMediaProxy) {
++			if !errors.Is(err, ErrMediaProxy) {
 +				t.Fatalf("expected clear proxy error, got %v", err)
 +			}
 +			if original.Proxy == nil {
@@ -473,7 +475,7 @@ index 0000000..e8f2d2f
 +	cli := NewClient(&store.Device{}, nil)
 +	cli.SetSOCKSProxy(testSOCKSProxy{t})
 +	_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
-+	if !errors.Is(err, errMediaProxy) {
++	if !errors.Is(err, ErrMediaProxy) {
 +		t.Fatalf("expected clear proxy error, got %v", err)
 +	}
 +	cli.SetProxy(nil)

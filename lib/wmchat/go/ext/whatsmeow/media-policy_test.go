@@ -136,7 +136,7 @@ func TestMediaHTTPProxyFailsClosed(t *testing.T) {
 				return nil, nil
 			}
 			_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
-			if !errors.Is(err, errMediaProxy) {
+			if !errors.Is(err, ErrMediaProxy) {
 				t.Fatalf("expected clear proxy error, got %v", err)
 			}
 			if original.Proxy == nil {
@@ -162,7 +162,7 @@ func TestMediaSOCKSProxyFailsClosed(t *testing.T) {
 	cli := NewClient(&store.Device{}, nil)
 	cli.SetSOCKSProxy(testSOCKSProxy{t})
 	_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
-	if !errors.Is(err, errMediaProxy) {
+	if !errors.Is(err, ErrMediaProxy) {
 		t.Fatalf("expected clear proxy error, got %v", err)
 	}
 	cli.SetProxy(nil)

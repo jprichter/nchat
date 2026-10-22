@@ -15,7 +15,9 @@ import (
 )
 
 var errUnsafeMediaURL = errors.New("media destination is not an approved HTTPS WhatsApp CDN")
-var errMediaProxy = errors.New("media downloads through proxies are unsupported by the DNS safety policy; refusing a direct connection")
+
+// ErrMediaProxy indicates that the DNS safety policy blocks a configured media proxy.
+var ErrMediaProxy = errors.New("media downloads through proxies are unsupported by the DNS safety policy; refusing a direct connection")
 
 // The upstream media_conn response advertises mmg.whatsapp.net and regional
 // media-*.cdn.whatsapp.net hosts. FetchStickerPack uses static.whatsapp.net.
@@ -105,10 +107,10 @@ func mediaDownloadClient(base *http.Client) *http.Client {
 			safe.Proxy = func(req *http.Request) (*url.URL, error) {
 				proxyURL, err := original.Proxy(req)
 				if err != nil {
-					return nil, errMediaProxy
+					return nil, ErrMediaProxy
 				}
 				if proxyURL != nil {
-					return nil, errMediaProxy
+					return nil, ErrMediaProxy
 				}
 				return nil, nil
 			}

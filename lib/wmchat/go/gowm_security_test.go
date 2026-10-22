@@ -2,12 +2,18 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/d99kris/nchat/lib/wmchat/go/internal/testcallbacks"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 )
 
 func TestDownloadFromFileIdRejectsLegacyEscape(t *testing.T) {
@@ -47,5 +53,40 @@ func TestDownloadFromFileIdRejectsLegacyEscape(t *testing.T) {
 	path, status := DownloadFromFileId(connID, string(serialized))
 	if path != target || status != FileStatusDownloaded {
 		t.Fatal("valid legacy attachment rejected")
+	}
+}
+
+func TestAttachmentDownloadWarningRedactsErrors(t *testing.T) {
+	const sensitiveURL = "https://mmg.whatsapp.net/private-media?token=secret"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"proxy policy", &url.Error{Op: "Get", URL: sensitiveURL, Err: fmt.Errorf("proxy credentials: %w", whatsmeow.ErrMediaProxy)}, "attachment download failed: " + whatsmeow.ErrMediaProxy.Error()},
+		{"other failure", errors.New(sensitiveURL), "attachment download failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := attachmentDownloadWarning(tc.err); got != tc.want {
+				t.Fatalf("unexpected warning: %q", got)
+			}
+		})
+	}
+}
+
+func TestProxyDownloadFailureDiagnostic(t *testing.T) {
+	client := whatsmeow.NewClient(&store.Device{}, nil)
+	proxyURL, err := url.Parse("http://user:secret@127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetProxy(http.ProxyURL(proxyURL))
+	_, err = DownloadFromFileInfo(client, DownloadInfo{Url: "https://mmg.whatsapp.net/private-media?token=secret"})
+	if !errors.Is(err, whatsmeow.ErrMediaProxy) {
+		t.Fatalf("expected proxy policy error, got %v", err)
+	}
+	warning := attachmentDownloadWarning(err)
+	if !strings.Contains(warning, whatsmeow.ErrMediaProxy.Error()) || strings.Contains(warning, "secret") || strings.Contains(warning, "private-media") {
+		t.Fatalf("missing policy reason or unredacted warning: %q", warning)
 	}
 }
