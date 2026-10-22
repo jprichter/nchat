@@ -12,9 +12,9 @@ export default {
   publish: { backend: 'github', draft: true },
   gate: [
     "rtk proxy python3 -m unittest discover -s src -p compose_test.py",
-    "rtk proxy env GOMODCACHE=/tmp/chat-security-tools/mod GOCACHE=/tmp/chat-security-tools/build GOTOOLCHAIN=auto sh -c 'cd lib/wmchat/go && go test ./...'",
-    "rtk proxy env GOMODCACHE=/tmp/chat-security-tools/mod GOCACHE=/tmp/chat-security-tools/build GOTOOLCHAIN=auto sh -c 'cd lib/wmchat/go && go vet ./...'",
-    "rtk proxy env GOMODCACHE=/tmp/chat-security-tools/mod GOCACHE=/tmp/chat-security-tools/build GOTOOLCHAIN=auto sh -c 'cd lib/wmchat/go/ext/whatsmeow && go test ./...'",
+    "rtk proxy env GOTOOLCHAIN=go1.26.10 sh -c 'cd lib/wmchat/go && go test ./...'",
+    "rtk proxy env GOTOOLCHAIN=go1.26.10 sh -c 'cd lib/wmchat/go && go vet ./...'",
+    "rtk proxy env GOTOOLCHAIN=go1.26.10 sh -c 'cd lib/wmchat/go/ext/whatsmeow && go test ./...'",
   ],
   maxRounds: 5,
   timeoutMs: 60 * 60 * 1000,

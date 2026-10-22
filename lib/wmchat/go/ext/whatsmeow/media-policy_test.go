@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.mau.fi/whatsmeow/store"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -108,17 +109,69 @@ func TestMediaDNSPolicy(t *testing.T) {
 }
 
 func TestMediaTransportRemovesAlternateDialers(t *testing.T) {
-	base := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+	base := &http.Client{Transport: &http.Transport{DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
 		t.Fatal("custom TLS dialer called")
 		return nil, nil
 	}}}
 	client := mediaDownloadClient(base)
 	transport := client.Transport.(mediaPolicyTransport).RoundTripper.(*http.Transport)
-	if transport.Proxy != nil || transport.DialTLSContext != nil || transport.DialContext == nil {
+	if transport.DialTLSContext != nil || transport.DialContext == nil {
 		t.Fatal("unsafe alternate route remains")
 	}
-	if base.Transport.(*http.Transport).Proxy == nil {
+	if base.Transport.(*http.Transport).DialTLSContext == nil {
 		t.Fatal("modified shared HTTP client")
+	}
+}
+
+func TestMediaHTTPProxyFailsClosed(t *testing.T) {
+	for _, scheme := range []string{"http", "https"} {
+		t.Run(scheme, func(t *testing.T) {
+			cli := NewClient(&store.Device{}, nil)
+			proxyURL, _ := url.Parse(scheme + "://127.0.0.1:1")
+			cli.SetProxy(http.ProxyURL(proxyURL))
+			original := cli.mediaHTTP.Transport.(*http.Transport)
+			// No DNS lookup, direct dial or proxy dial may occur.
+			original.DialContext = func(context.Context, string, string) (net.Conn, error) {
+				t.Fatal("proxy rejection reached dialer")
+				return nil, nil
+			}
+			_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
+			if !errors.Is(err, errMediaProxy) {
+				t.Fatalf("expected clear proxy error, got %v", err)
+			}
+			if original.Proxy == nil {
+				t.Fatal("modified shared proxy configuration")
+			}
+		})
+	}
+}
+
+type testSOCKSProxy struct{ t *testing.T }
+
+func (p testSOCKSProxy) Dial(network, address string) (net.Conn, error) {
+	p.t.Fatal("SOCKS proxy dialed")
+	return nil, nil
+}
+
+func (p testSOCKSProxy) DialContext(context.Context, string, string) (net.Conn, error) {
+	p.t.Fatal("SOCKS proxy dialed")
+	return nil, nil
+}
+
+func TestMediaSOCKSProxyFailsClosed(t *testing.T) {
+	cli := NewClient(&store.Device{}, nil)
+	cli.SetSOCKSProxy(testSOCKSProxy{t})
+	_, err := cli.doMediaDownloadRequest(context.Background(), "https://mmg.whatsapp.net/file")
+	if !errors.Is(err, errMediaProxy) {
+		t.Fatalf("expected clear proxy error, got %v", err)
+	}
+	cli.SetProxy(nil)
+	if cli.mediaSOCKSProxy {
+		t.Fatal("removing proxy did not restore direct media policy")
+	}
+	cli.SetSOCKSProxy(testSOCKSProxy{t}, SetProxyOptions{NoMedia: true})
+	if cli.mediaSOCKSProxy {
+		t.Fatal("websocket-only proxy blocked direct media")
 	}
 }
 

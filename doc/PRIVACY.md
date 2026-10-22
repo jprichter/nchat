@@ -30,12 +30,12 @@ redirects before transport. For the standard HTTP transport, DNS answers must
 all be public addresses; loopback, private, link-local, shared, documentation
 and transition ranges are rejected. Connections dial the checked IP directly
 while TLS verifies the original hostname, preventing a second DNS lookup from
-rebinding the destination. Attachment downloads deliberately ignore the
-configured `proxy_` SOCKS5 or HTTP proxy, environment proxies and custom dialers,
-because a proxy could resolve the hostname again. With `proxy_` set, downloads
-therefore connect directly to WhatsApp's media servers and do not use your proxy;
-that exposes your IP address to them. Websocket and upload traffic still use the
-configured proxy.
+rebinding the destination. Attachment downloads fail closed with a clear error
+when an HTTP proxy (including environment proxies) applies or a SOCKS5 media
+proxy is configured: they never silently fall back to a direct connection.
+Proxy downloads are currently unsupported because the proxy can resolve the
+hostname again. Websocket and upload traffic still use the configured proxy.
+Custom TLS dialers are replaced by the checked direct dialer.
 A library caller injecting its own RoundTripper supplies trusted application
 code responsible for equivalent connection checks; URL restrictions still apply.
 No live account was used for the offline regression tests, so worldwide CDN
@@ -79,3 +79,11 @@ this workflow. Inspect a downloaded script before running it, choose the
 intended repository (`NCHAT_REPO`, default `d99kris/nchat`) and pin a release with
 `NCHAT_VERSION` where appropriate. Building reviewed source is a separate trust
 choice, not proof that a downloaded release binary matches it.
+
+Builds and gates require at least the patched Go 1.26.10 toolchain, as enforced
+by both WhatsApp module directives. The committed gates pin `GOTOOLCHAIN=go1.26.10`
+and inherit `GOMODCACHE` and `GOCACHE` from the caller (or Go defaults). For the
+same supported toolchain when building, run `GOTOOLCHAIN=go1.26.10 ./make.sh build`,
+or `GOTOOLCHAIN=go1.26.10 go build -buildvcs=false -buildmode=c-archive -o /tmp/libcgowm.a .`
+from `lib/wmchat/go`. Cache directories are optional caller configuration and
+must not be hardcoded into the repository's gate.
