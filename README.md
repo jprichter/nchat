@@ -155,6 +155,10 @@ Install Pre-built Binary
 Experimental support for Linux (glibc >= 2.28 or musl) x86_64 and arm64, as
 well as macOS arm64.
 
+See [privacy, local storage and installer trust limits](doc/PRIVACY.md) before
+using the convenience installer. Its checksum manifest shares the release origin;
+it is not an independent signature.
+
 **Install**
 
     curl -fsSL https://raw.githubusercontent.com/d99kris/nchat/master/utils/install.sh | bash
@@ -431,7 +435,10 @@ SOCKS server). Note: In order to use a proxy while setting up nchat the first
 time, it is recommended to first run nchat without arguments (`nchat`) for its
 config dir to be created, and then edit proxy settings in
 `~/.config/nchat/app.conf` as needed, before running `nchat -s` to setup an
-account.
+account. WhatsApp attachment downloads fail closed when this proxy is configured;
+they do not fall back to a direct connection. Downloads also fail closed when an
+HTTP proxy (including an environment proxy) applies. Proxy downloads are currently
+unsupported by the DNS safety policy; see [privacy notes](doc/PRIVACY.md).
 
 ### timestamp_iso
 
@@ -570,9 +577,11 @@ Refer to [Auto-Compose](/doc/AUTOCOMPOSE.md) for details.
 
 ### auto_compose_enabled
 
-Specifies whether to enable using auto-compose. The reason for not enabling
-it by default is that the `compose` tool may use third-party services (if API
-key is set up in the shell environment) that can incur costs.
+Auto-compose is disabled by default (`0`). While disabled it does not invoke
+the helper or upload chat history for AI replies. Enabling it permits explicit
+auto-compose invocations to disclose sender names, your name and recent message
+text to the selected provider, which may also incur costs. See
+[Auto-Compose](/doc/AUTOCOMPOSE.md) and [Privacy](/doc/PRIVACY.md).
 
 ### auto_compose_history_count
 

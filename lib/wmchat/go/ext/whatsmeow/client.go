@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -199,9 +200,10 @@ type Client struct {
 
 	serverTimeOffset atomic.Int64
 
-	mediaHTTP     *http.Client
-	websocketHTTP *http.Client
-	preLoginHTTP  *http.Client
+	mediaHTTP       *http.Client
+	mediaSOCKSProxy bool
+	websocketHTTP   *http.Client
+	preLoginHTTP    *http.Client
 
 	// This field changes the client to act like a Messenger client instead of a WhatsApp one.
 	//
@@ -412,6 +414,9 @@ func (cli *Client) SetSOCKSProxy(px proxy.Dialer, opts ...SetProxyOptions) {
 	pxc := px.(proxy.ContextDialer)
 	transport.DialContext = pxc.DialContext
 	cli.setTransport(transport, opt)
+	if !opt.NoMedia {
+		cli.mediaSOCKSProxy = true
+	}
 }
 
 func (cli *Client) setTransport(transport *http.Transport, opt SetProxyOptions) {
@@ -423,6 +428,7 @@ func (cli *Client) setTransport(transport *http.Transport, opt SetProxyOptions) 
 	}
 	if !opt.NoMedia {
 		cli.mediaHTTP.Transport = transport
+		cli.mediaSOCKSProxy = false
 	}
 }
 
@@ -430,6 +436,7 @@ func (cli *Client) setTransport(transport *http.Transport, opt SetProxyOptions) 
 // This will overwrite any set proxy calls.
 func (cli *Client) SetMediaHTTPClient(h *http.Client) {
 	cli.mediaHTTP = h
+	cli.mediaSOCKSProxy = false
 }
 
 // SetWebsocketHTTPClient sets the HTTP client used to establish the websocket connection for logged-in sessions.
@@ -1106,8 +1113,9 @@ func (cli *Client) getUnifiedSessionID() string {
 	return strconv.FormatInt(unifiedID, 10)
 }
 
+// Unified session telemetry is opt-in in nchat, for pairing and presence alike.
 func (cli *Client) sendUnifiedSession() {
-	if cli == nil {
+	if cli == nil || os.Getenv("NCHAT_WHATSAPP_UNIFIED_SESSION") != "1" {
 		return
 	}
 

@@ -5,3 +5,11 @@
 /dbgbuild
 /dist
 /.gotools
+
+/.loop/*
+!/.loop/prompts/
+**/__pycache__/
+/lib/wmchat/go/*.a
+/lib/wmchat/go/*.h
+/lib/wmchat/go/*.so
+/lib/wmchat/go/*.dylib

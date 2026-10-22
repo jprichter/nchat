@@ -173,7 +173,7 @@ def main():
     elif service == "ollama":
         api_url = "http://localhost:11434/v1/chat/completions"
         api_key_env = None
-        service_default_model = "deepseek-v3.1:671b-cloud"
+        service_default_model = "llama3.2:3b"
     else:
         base = service if service.startswith(("http://", "https://")) else f"http://{service}"
         api_url = base.rstrip("/") + "/v1/chat/completions"

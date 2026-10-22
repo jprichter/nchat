@@ -37,6 +37,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 
+	"github.com/d99kris/nchat/lib/wmchat/go/internal/mediacache"
 	"github.com/mdp/qrterminal"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -403,7 +404,7 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 
 	info.MediaType = whatsmeow.GetMediaType(msg)
 	if len(info.MediaType) == 0 {
-		LOG_WARNING(fmt.Sprintf("unknown mediatype in msg %+v", msg))
+		LOG_WARNING("unknown media type")
 		return ""
 	}
 
@@ -421,7 +422,6 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 		return ""
 	}
 
-	LOG_TRACE(fmt.Sprintf("fileInfo %#v", info))
 	bytes, err := json.Marshal(info)
 	if err != nil {
 		LOG_WARNING(fmt.Sprintf("json encode failed"))
@@ -429,13 +429,11 @@ func DownloadableMessageToFileId(client *whatsmeow.Client, msg whatsmeow.Downloa
 	}
 
 	str := string(bytes)
-	LOG_TRACE(fmt.Sprintf("fileId %s", str))
 
 	return str
 }
 
 func DownloadFromFileId(connId int, fileId string) (string, int) {
-	LOG_TRACE(fmt.Sprintf("fileId %s", fileId))
 	var info DownloadInfo
 	if err := json.Unmarshal([]byte(fileId), &info); err != nil {
 		LOG_WARNING(fmt.Sprintf("unmarshal fileId failed: %v", err))
@@ -446,8 +444,6 @@ func DownloadFromFileId(connId int, fileId string) (string, int) {
 		return "", FileStatusDownloadFailed
 	}
 
-	LOG_TRACE(fmt.Sprintf("fileInfo %#v", info))
-
 	// get client
 	client := GetClient(connId)
 	if client == nil {
@@ -455,62 +451,39 @@ func DownloadFromFileId(connId int, fileId string) (string, int) {
 		return "", FileStatusDownloadFailed
 	}
 
-	targetPath := info.TargetPath
-	filePath := ""
-	fileStatus := FileStatusNone
-
-	// download if not yet present
-	if _, statErr := os.Stat(targetPath); os.IsNotExist(statErr) {
-		LOG_TRACE(fmt.Sprintf("download new %#v", targetPath))
-		CWmSetStatus(connId, FlagFetching)
-
-		data, err := DownloadFromFileInfo(client, info)
-		if err != nil {
-			LOG_WARNING(fmt.Sprintf("download error %#v", err))
-			fileStatus = FileStatusDownloadFailed
-		} else {
-			file, err := os.Create(targetPath)
-			if err != nil {
-				LOG_WARNING(fmt.Sprintf("create error %#v", err))
-				fileStatus = FileStatusDownloadFailed
-			} else {
-				defer file.Close()
-				_, err = file.Write(data)
-				if err != nil {
-					LOG_WARNING(fmt.Sprintf("write error %#v", err))
-					fileStatus = FileStatusDownloadFailed
-				} else {
-					LOG_TRACE(fmt.Sprintf("download ok"))
-					filePath = targetPath
-					fileStatus = FileStatusDownloaded
-				}
-			}
-		}
-		CWmClearStatus(connId, FlagFetching)
-	} else {
-		LOG_TRACE(fmt.Sprintf("download cached %#v", targetPath))
-		filePath = targetPath
-		fileStatus = FileStatusDownloaded
+	CWmSetStatus(connId, FlagFetching)
+	defer CWmClearStatus(connId, FlagFetching)
+	err := mediacache.Fetch(GetPath(connId), info.TargetPath, func() ([]byte, error) {
+		return DownloadFromFileInfo(client, info)
+	})
+	if err != nil {
+		LOG_WARNING(attachmentDownloadWarning(err))
+		return "", FileStatusDownloadFailed
 	}
+	return info.TargetPath, FileStatusDownloaded
+}
 
-	return filePath, fileStatus
+// Only log fixed policy text: wrapped HTTP errors may include private media URLs.
+func attachmentDownloadWarning(err error) string {
+	if errors.Is(err, whatsmeow.ErrMediaProxy) {
+		return "attachment download failed: " + whatsmeow.ErrMediaProxy.Error()
+	}
+	return "attachment download failed"
 }
 
 func DownloadFromFileInfo(client *whatsmeow.Client, info DownloadInfo) ([]byte, error) {
 	ctx := context.TODO()
 	var err error = whatsmeow.ErrNoURLPresent
 	if len(info.Url) > 0 {
-		LOG_TRACE(fmt.Sprintf("download url: %s", info.Url))
 		var data []byte
 		data, err = client.DownloadMediaWithUrl(ctx, info.Url, info.MediaKey, info.MediaType, info.FileEncSha256, info.FileSha256)
 		if err == nil {
 			return data, nil
 		}
 		// media urls expire; fall through to direct path if available
-		LOG_WARNING(fmt.Sprintf("download url error %#v", err))
+		LOG_WARNING("media URL download failed; trying direct path")
 	}
 	if len(info.DirectPath) > 0 {
-		LOG_TRACE(fmt.Sprintf("download directpath: %s", info.DirectPath))
 		return client.DownloadMediaWithPath(ctx, info.DirectPath, info.FileEncSha256, info.FileSha256, info.MediaKey, info.MediaType, whatsmeow.GetMMSType(info.MediaType), false)
 	}
 	return nil, err
@@ -1033,7 +1006,7 @@ func (handler *WmEventHandler) HandleHistorySync(historySync *events.HistorySync
 
 	conversations := historySync.Data.GetConversations()
 	for _, conversation := range conversations {
-		LOG_TRACE(fmt.Sprintf("HandleHistorySync Conversation %#v", *conversation))
+		LOG_TRACE("HandleHistorySync conversation received")
 
 		chatJid, _ := types.ParseJID(conversation.GetID())
 
@@ -1912,8 +1885,7 @@ func (handler *WmEventHandler) HandleImageMessage(messageInfo types.MessageInfo,
 	fileId := ""
 	fileStatus := FileStatusNotDownloaded
 	if !isEdited {
-		var tmpPath string = GetPath(connId) + "/tmp"
-		filePath = fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+		filePath = mediacache.Path(GetPath(connId), string(messageInfo.ID), "attachment"+ext)
 		fileId = DownloadableMessageToFileId(client, img, filePath)
 	}
 
@@ -1972,8 +1944,7 @@ func (handler *WmEventHandler) HandleVideoMessage(messageInfo types.MessageInfo,
 	fileId := ""
 	fileStatus := FileStatusNotDownloaded
 	if !isEdited {
-		var tmpPath string = GetPath(connId) + "/tmp"
-		filePath = fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+		filePath = mediacache.Path(GetPath(connId), string(messageInfo.ID), "attachment"+ext)
 		fileId = DownloadableMessageToFileId(client, vid, filePath)
 	}
 
@@ -2023,8 +1994,7 @@ func (handler *WmEventHandler) HandleAudioMessage(messageInfo types.MessageInfo,
 	handler.ProcessContextInfo(ci, &quotedId, &text)
 
 	// file id, path and status
-	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+	filePath := mediacache.Path(GetPath(connId), string(messageInfo.ID), "attachment"+ext)
 	fileId := DownloadableMessageToFileId(client, aud, filePath)
 	fileStatus := FileStatusNotDownloaded
 
@@ -2077,8 +2047,7 @@ func (handler *WmEventHandler) HandleDocumentMessage(messageInfo types.MessageIn
 	fileId := ""
 	fileStatus := FileStatusNotDownloaded
 	if !isEdited {
-		var tmpPath string = GetPath(connId) + "/tmp"
-		filePath = fmt.Sprintf("%s/%s-%s", tmpPath, messageInfo.ID, doc.GetFileName())
+		filePath = mediacache.Path(GetPath(connId), string(messageInfo.ID), doc.GetFileName())
 		fileId = DownloadableMessageToFileId(client, doc, filePath)
 	}
 
@@ -2128,8 +2097,7 @@ func (handler *WmEventHandler) HandleStickerMessage(messageInfo types.MessageInf
 	handler.ProcessContextInfo(ci, &quotedId, &text)
 
 	// file id, path and status
-	var tmpPath string = GetPath(connId) + "/tmp"
-	filePath := fmt.Sprintf("%s/%s%s", tmpPath, messageInfo.ID, ext)
+	filePath := mediacache.Path(GetPath(connId), string(messageInfo.ID), "attachment"+ext)
 	fileId := DownloadableMessageToFileId(client, sticker, filePath)
 	fileStatus := FileStatusNotDownloaded
 
@@ -3743,7 +3711,7 @@ func WmSendStatus(connId int, isOnline int) int {
 
 func WmDownloadFile(connId int, chatId string, msgId string, fileId string, action int) int {
 
-	LOG_TRACE("download file " + strconv.Itoa(connId) + ", " + chatId + ", " + msgId + ", " + fileId)
+	LOG_TRACE("download file " + strconv.Itoa(connId) + ", " + chatId + ", " + msgId)
 
 	// sanity check arg
 	if connId == -1 {

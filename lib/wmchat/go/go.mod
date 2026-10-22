@@ -33,4 +33,4 @@ require (
 	rsc.io/qr v0.2.0 // indirect
 )
 
-go 1.26.0
+go 1.26.10
